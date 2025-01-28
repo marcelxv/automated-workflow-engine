@@ -75,7 +75,7 @@ jobs:
           EXISTING_SCHEMA=$(curl -s -H "X-Authorization: $TOKEN" \
             "https://foodready-prod.orkesconductor.io/api/metadata/workflow/schema/$SCHEMA_NAME")
           
-          if [ $? -eq 0 ] && [ ! -z "$EXISTING_SCHEMA" ] && [ "$EXISTING_SCHEMA" != "null" ]; then
+          if [[ "$EXISTING_SCHEMA" != *"not found"* ]] && [[ ! -z "$EXISTING_SCHEMA" ]]; then
             EXISTING_VERSION=$(echo "$EXISTING_SCHEMA" | jq -r '.version')
             if [ "$EXISTING_VERSION" -ge "$SCHEMA_VERSION" ]; then
               echo "⚠️ Schema $SCHEMA_NAME version $SCHEMA_VERSION already exists with same or higher version ($EXISTING_VERSION). Skipping."
@@ -84,7 +84,7 @@ jobs:
           fi
           
           echo "📤 Deploying schema: $schema_file (v$SCHEMA_VERSION)"
-          RESPONSE=$(curl -s -X PUT \
+          RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -H "X-Authorization: $TOKEN" \
             -d @"$schema_file" \
@@ -94,7 +94,7 @@ jobs:
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           CONTENT=$(echo "$RESPONSE" | sed '$d')
           
-          if [ "$HTTP_CODE" = "200" ]; then
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
             echo "✅ Successfully deployed schema: $schema_file"
           elif [ "$HTTP_CODE" = "409" ]; then
             echo "⚠️ Schema conflict: $CONTENT"
@@ -119,18 +119,14 @@ jobs:
           
           # Check if workflow exists
           EXISTING_WORKFLOW=$(curl -s -H "X-Authorization: $TOKEN" \
-            "https://foodready-prod.orkesconductor.io/api/metadata/workflow/$WORKFLOW_NAME")
+            "https://foodready-prod.orkesconductor.io/api/metadata/workflow/$WORKFLOW_NAME?version=$WORKFLOW_VERSION")
           
-          if [ $? -eq 0 ] && [ ! -z "$EXISTING_WORKFLOW" ] && [ "$EXISTING_WORKFLOW" != "null" ]; then
-            EXISTING_VERSION=$(echo "$EXISTING_WORKFLOW" | jq -r '.version')
-            if [ "$EXISTING_VERSION" -ge "$WORKFLOW_VERSION" ]; then
-              echo "⚠️ Workflow $WORKFLOW_NAME version $WORKFLOW_VERSION already exists with same or higher version ($EXISTING_VERSION). Skipping."
-              continue
-            fi
+          if [[ "$EXISTING_WORKFLOW" != *"not found"* ]] && [[ ! -z "$EXISTING_WORKFLOW" ]]; then
+            echo "⚠️ Workflow $WORKFLOW_NAME version $WORKFLOW_VERSION already exists. Updating..."
           fi
           
           echo "📤 Deploying workflow: $workflow_file (v$WORKFLOW_VERSION)"
-          RESPONSE=$(curl -s -X PUT \
+          RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -H "X-Authorization: $TOKEN" \
             -d @"$workflow_file" \
@@ -140,10 +136,27 @@ jobs:
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           CONTENT=$(echo "$RESPONSE" | sed '$d')
           
-          if [ "$HTTP_CODE" = "200" ]; then
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
             echo "✅ Successfully deployed workflow: $workflow_file"
           elif [ "$HTTP_CODE" = "409" ]; then
             echo "⚠️ Workflow conflict: $CONTENT"
+            # Try update if conflict
+            RESPONSE=$(curl -s -X PUT \
+              -H "Content-Type: application/json" \
+              -H "X-Authorization: $TOKEN" \
+              -d @"$workflow_file" \
+              -w "\n%{http_code}" \
+              "https://foodready-prod.orkesconductor.io/api/metadata/workflow")
+            
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+              echo "✅ Successfully updated workflow: $workflow_file"
+            else
+              echo "❌ Failed to update workflow: $workflow_file"
+              echo "Status: $HTTP_CODE"
+              echo "Response: $CONTENT"
+              exit 1
+            fi
           else
             echo "❌ Failed to deploy workflow: $workflow_file"
             echo "Status: $HTTP_CODE"
