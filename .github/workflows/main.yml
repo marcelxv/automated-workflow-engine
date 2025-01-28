@@ -56,7 +56,7 @@ jobs:
             "keySecret": "${{ secrets.ORKES_REPO_SECRET }}"
           }
 
-    - name: Check and Deploy Schemas
+    - name: Deploy Workflows
       if: success() && steps.auth.outputs.response != ''
       run: |
         TOKEN=$(echo '${{ steps.auth.outputs.response }}' | jq -r '.token')
@@ -64,68 +64,13 @@ jobs:
           echo "❌ Failed to extract auth token"
           exit 1
         fi
-
-        echo "🔍 Finding schema files..."
-        find workflows -type f -name "*_schema.json" | while read schema_file; do
-          echo "📋 Processing schema: $schema_file"
-          SCHEMA_NAME=$(jq -r '.name' "$schema_file")
-          SCHEMA_VERSION=$(jq -r '.version' "$schema_file")
-          
-          # Check if schema exists
-          EXISTING_SCHEMA=$(curl -s -H "X-Authorization: $TOKEN" \
-            "https://foodready-prod.orkesconductor.io/api/metadata/workflow/schema/$SCHEMA_NAME")
-          
-          if [[ "$EXISTING_SCHEMA" != *"not found"* ]] && [[ ! -z "$EXISTING_SCHEMA" ]]; then
-            EXISTING_VERSION=$(echo "$EXISTING_SCHEMA" | jq -r '.version')
-            if [ "$EXISTING_VERSION" -ge "$SCHEMA_VERSION" ]; then
-              echo "⚠️ Schema $SCHEMA_NAME version $SCHEMA_VERSION already exists with same or higher version ($EXISTING_VERSION). Skipping."
-              continue
-            fi
-          fi
-          
-          echo "📤 Deploying schema: $schema_file (v$SCHEMA_VERSION)"
-          RESPONSE=$(curl -s -X POST \
-            -H "Content-Type: application/json" \
-            -H "X-Authorization: $TOKEN" \
-            -d @"$schema_file" \
-            -w "\n%{http_code}" \
-            "https://foodready-prod.orkesconductor.io/api/metadata/workflow/schema")
-          
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          CONTENT=$(echo "$RESPONSE" | sed '$d')
-          
-          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
-            echo "✅ Successfully deployed schema: $schema_file"
-          elif [ "$HTTP_CODE" = "409" ]; then
-            echo "⚠️ Schema conflict: $CONTENT"
-          else
-            echo "❌ Failed to deploy schema: $schema_file"
-            echo "Status: $HTTP_CODE"
-            echo "Response: $CONTENT"
-            exit 1
-          fi
-        done
-
-    - name: Check and Deploy Workflows
-      if: success() && steps.auth.outputs.response != ''
-      run: |
-        TOKEN=$(echo '${{ steps.auth.outputs.response }}' | jq -r '.token')
         
         echo "🔍 Finding workflow files..."
         find workflows -type f -name "*.json" ! -name "*_schema.json" ! -name "*_payload.json" | while read workflow_file; do
-          echo "📋 Processing workflow: $workflow_file"
+          echo "📤 Deploying workflow: $workflow_file"
           WORKFLOW_NAME=$(jq -r '.name' "$workflow_file")
           WORKFLOW_VERSION=$(jq -r '.version' "$workflow_file")
           
-          # Check if workflow exists
-          EXISTING_WORKFLOW=$(curl -s -H "X-Authorization: $TOKEN" \
-            "https://foodready-prod.orkesconductor.io/api/metadata/workflow/$WORKFLOW_NAME?version=$WORKFLOW_VERSION")
-          
-          if [[ "$EXISTING_WORKFLOW" != *"not found"* ]] && [[ ! -z "$EXISTING_WORKFLOW" ]]; then
-            echo "⚠️ Workflow $WORKFLOW_NAME version $WORKFLOW_VERSION already exists. Updating..."
-          fi
-          
-          echo "📤 Deploying workflow: $workflow_file (v$WORKFLOW_VERSION)"
           RESPONSE=$(curl -s -X POST \
             -H "Content-Type: application/json" \
             -H "X-Authorization: $TOKEN" \
@@ -137,26 +82,7 @@ jobs:
           CONTENT=$(echo "$RESPONSE" | sed '$d')
           
           if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
-            echo "✅ Successfully deployed workflow: $workflow_file"
-          elif [ "$HTTP_CODE" = "409" ]; then
-            echo "⚠️ Workflow conflict: $CONTENT"
-            # Try update if conflict
-            RESPONSE=$(curl -s -X PUT \
-              -H "Content-Type: application/json" \
-              -H "X-Authorization: $TOKEN" \
-              -d @"$workflow_file" \
-              -w "\n%{http_code}" \
-              "https://foodready-prod.orkesconductor.io/api/metadata/workflow")
-            
-            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
-              echo "✅ Successfully updated workflow: $workflow_file"
-            else
-              echo "❌ Failed to update workflow: $workflow_file"
-              echo "Status: $HTTP_CODE"
-              echo "Response: $CONTENT"
-              exit 1
-            fi
+            echo "✅ Successfully deployed workflow: $workflow_file (v$WORKFLOW_VERSION)"
           else
             echo "❌ Failed to deploy workflow: $workflow_file"
             echo "Status: $HTTP_CODE"
@@ -174,9 +100,7 @@ jobs:
         
         if [[ -n "${{ steps.auth.outputs.response }}" ]]; then
           echo "Authentication: ✅ Success"
-          DEPLOYED_SCHEMAS=$(find workflows -type f -name "*_schema.json" | wc -l)
           DEPLOYED_WORKFLOWS=$(find workflows -type f -name "*.json" ! -name "*_schema.json" ! -name "*_payload.json" | wc -l)
-          echo "Processed Schemas: $DEPLOYED_SCHEMAS"
           echo "Processed Workflows: $DEPLOYED_WORKFLOWS"
         else
           echo "Authentication: ❌ Failed"
