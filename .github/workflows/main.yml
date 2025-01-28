@@ -18,18 +18,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
-      - name: Setup environment
-        run: |
-          # Install required tools for local testing
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            if command -v apt-get &> /dev/null; then
-              sudo apt-get update
-              sudo apt-get install -y git curl jq
-            elif command -v apk &> /dev/null; then
-              apk add --no-cache git curl jq
-            fi
-          fi
-
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
@@ -40,74 +28,45 @@ jobs:
           npm init -y
           npm install ajv ajv-formats glob
 
-      - name: List Files (Debug)
-        run: |
-          echo "Current directory contents:"
-          ls -la
-          echo "\nScripts directory contents:"
-          ls -la scripts || echo "Scripts directory not found"
-          echo "\nWorkflows directory contents:"
-          ls -la workflows || echo "Workflows directory not found"
-
-      - name: Manual File Detection
-        id: manual-files
-        run: |
-          echo "Finding changed JSON files..."
-          CHANGED_FILES=$(find workflows -name "*.json" -not -name "*package*.json")
-          echo "Changed files: $CHANGED_FILES"
-          echo "::set-output name=files::$CHANGED_FILES"
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v39
+        with:
+          files: |
+            workflows/**/*.json
+            !**/package*.json
 
       - name: Run Workflow Validation
-        if: success()
+        id: validation
+        if: steps.changed-files.outputs.any_changed == 'true'
         run: |
-          echo "Running workflow validation..."
-          if [ -f "scripts/validate-workflows.js" ]; then
-            node scripts/validate-workflows.js ./workflows
+          if node scripts/validate-workflows.js ./workflows; then
+            echo "VALIDATION_PASSED=true" >> $GITHUB_ENV
           else
-            echo "Validation script not found, skipping validation"
-            # For local testing, we'll consider this a success
-            if [ "$GITHUB_ACTIONS" != "true" ]; then
-              exit 0
-            fi
+            echo "VALIDATION_PASSED=false" >> $GITHUB_ENV
             exit 1
           fi
 
-      - name: Mock Authentication for Local Testing
-        if: env.ACT
-        id: mock-auth
-        run: |
-          echo "::set-output name=token::mock-token-for-local-testing"
-
       - name: Authenticate with Orkes
-        if: success() && !env.ACT
+        if: env.VALIDATION_PASSED == 'true'
         id: authenticate
         uses: fjogeleit/http-request-action@v1.9.1
         with:
           url: 'https://foodready-prod.orkesconductor.io/api/auth/login'
           method: 'POST'
           contentType: 'application/json'
-          data: '{"keyId": "${{ secrets.ORKES_REPO_KEY }}", "keySecret": "${{ secrets.ORKES_REPO_SECRET }}"}'
-
-      - name: Mock Deploy for Local Testing
-        if: success() && env.ACT
-        run: |
-          echo "🚀 Mock deployment for local testing"
-          for file in ${{ steps.manual-files.outputs.files }}; do
-            if [[ $file == *_schema.json ]]; then
-              echo "Would deploy schema: $file"
-              cat "$file"
-            elif [[ ! $file =~ (_schema|_payload)\.json$ ]]; then
-              echo "Would deploy workflow: $file"
-              cat "$file"
-            fi
-          done
+          data: |
+            {
+              "keyId": "${{ secrets.ORKES_REPO_KEY }}",
+              "keySecret": "${{ secrets.ORKES_REPO_SECRET }}"
+            }
 
       - name: Deploy to Orkes
-        if: success() && !env.ACT && steps.authenticate.outputs.response != ''
+        if: env.VALIDATION_PASSED == 'true' && steps.authenticate.outputs.response != ''
         env:
-          ORKES_TOKEN: ${{ !env.ACT && fromJson(steps.authenticate.outputs.response).token || steps.mock-auth.outputs.token }}
+          ORKES_TOKEN: ${{ fromJson(steps.authenticate.outputs.response).token }}
         run: |
-          for file in ${{ steps.manual-files.outputs.files }}; do
+          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
             if [[ $file == *_schema.json ]]; then
               echo "Deploying schema: $file"
               curl -X PUT \
@@ -120,7 +79,7 @@ jobs:
               echo "Deploying workflow: $file"
               workflow_name=$(jq -r '.name' "$file")
               echo "Workflow name: $workflow_name"
-              a
+              
               curl -X PUT \
                 -H "Content-Type: application/json" \
                 -H "X-Authorization: $ORKES_TOKEN" \
@@ -132,10 +91,16 @@ jobs:
       - name: Report Status
         if: always()
         run: |
-          if [[ "${{ job.status }}" == "success" ]]; then
+          if [[ "${{ env.VALIDATION_PASSED }}" == "true" && -n "${{ steps.authenticate.outputs.response }}" ]]; then
             echo "✅ Validation and deployment successful"
             exit 0
           else
-            echo "❌ Validation or deployment failed"
+            echo "❌ Process failed"
+            if [[ "${{ env.VALIDATION_PASSED }}" != "true" ]]; then
+              echo "Validation failed"
+            fi
+            if [[ -z "${{ steps.authenticate.outputs.response }}" ]]; then
+              echo "Authentication failed"
+            fi
             exit 1
           fi
