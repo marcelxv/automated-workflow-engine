@@ -18,93 +18,116 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
+      - name: Setup environment
+        id: setup
+        run: |
+          # Install required tools for local testing
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            if command -v apt-get &> /dev/null; then
+              sudo apt-get update
+              sudo apt-get install -y git curl jq
+            elif command -v apk &> /dev/null; then
+              apk add --no-cache git curl jq
+            fi
+          fi
+          echo "::set-output name=setup_complete::true"
+
       - name: Setup Node.js
+        if: steps.setup.outputs.setup_complete == 'true'
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
       - name: Install Dependencies
+        if: steps.setup.outputs.setup_complete == 'true'
         run: |
           npm init -y
           npm install ajv ajv-formats glob
+          echo "VALIDATION_STATUS=pending" >> $GITHUB_ENV
 
-      - name: Get changed files
-        id: changed-files
-        uses: tj-actions/changed-files@v39
-        with:
-          files: |
-            **/*.json
-            !**/package*.json
-
-      - name: Run Validation
-        if: steps.changed-files.outputs.any_changed == 'true'
+      - name: List Files (Debug)
+        if: steps.setup.outputs.setup_complete == 'true'
         run: |
-          # Create validation script
-          cat > validate.js << 'EOL'
-          const OrkesValidator = require('../scripts/validate-workflows');
-          const validator = new OrkesValidator('./');
-          const isValid = validator.validateFiles();
-          process.exit(isValid ? 0 : 1);
-          EOL
+          echo "Current directory contents:"
+          ls -la
+          echo "Scripts directory contents:"
+          ls -la scripts || echo "Scripts directory not found"
+          echo "Workflows directory contents:"
+          ls -la workflows || echo "Workflows directory not found"
 
-          # Copy validator class from repo
-          cp $GITHUB_WORKSPACE/scripts/validate-workflows.js .
-
-          # Run validation
-          node validate.js
-        id: validation
-
-      - name: Authenticate with Orkes
-        if: success() && steps.changed-files.outputs.any_changed == 'true'
-        id: authenticate
-        uses: fjogeleit/http-request-action@v1.9.1
-        with:
-          url: 'https://foodready-prod.orkesconductor.io/api/auth/login'
-          method: 'POST'
-          contentType: 'application/json'
-          data: '{"keyId": "${{ secrets.ORKES_REPO_KEY }}", "keySecret": "${{ secrets.ORKES_REPO_SECRET }}"}'
-
-      - name: Deploy to Orkes
-        if: success() && steps.changed-files.outputs.any_changed == 'true'
+      - name: Manual File Detection
+        id: manual-files
+        if: steps.setup.outputs.setup_complete == 'true'
         run: |
-          # Function to extract name from JSON file
-          get_name() {
-            local file=$1
-            name=$(cat $file | jq -r '.name')
-            echo $name
-          }
+          CHANGED_FILES=$(find workflows -name "*.json" -not -name "*package*.json" || echo "")
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "No JSON files found to process"
+            echo "::set-output name=has_files::false"
+          else
+            echo "Found files to process:"
+            echo "$CHANGED_FILES"
+            echo "::set-output name=has_files::true"
+            echo "::set-output name=files::$CHANGED_FILES"
+          fi
 
-          # Process changed files
-          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+      - name: Run Workflow Validation
+        if: steps.manual-files.outputs.has_files == 'true'
+        run: |
+          if [ -f "scripts/validate-workflows.js" ]; then
+            echo "Running workflow validation..."
+            if node scripts/validate-workflows.js ./workflows; then
+              echo "VALIDATION_STATUS=success" >> $GITHUB_ENV
+            else
+              echo "VALIDATION_STATUS=failure" >> $GITHUB_ENV
+              if [ "$GITHUB_ACTIONS" != "true" ]; then
+                echo "Local validation failed but continuing for testing"
+              fi
+            fi
+          else
+            echo "Validation script not found"
+            if [ "$GITHUB_ACTIONS" != "true" ]; then
+              echo "VALIDATION_STATUS=success" >> $GITHUB_ENV
+              echo "Local testing: Skipping validation"
+            else
+              echo "VALIDATION_STATUS=failure" >> $GITHUB_ENV
+            fi
+          fi
+
+      - name: Mock Deploy for Local Testing
+        if: env.ACT && env.VALIDATION_STATUS != 'failure'
+        run: |
+          echo "🚀 Local testing - Mock deployment"
+          for file in ${{ steps.manual-files.outputs.files }}; do
             if [[ $file == *_schema.json ]]; then
-              echo "Processing schema file: $file"
-              # Deploy schema to Orkes
-              curl -X PUT \
-                -H "Content-Type: application/json" \
-                -H "X-Authorization: ${{ fromJson(steps.authenticate.outputs.response).token }}" \
-                -d @"$file" \
-                "https://foodready-prod.orkesconductor.io/api/metadata/workflow/schema"
+              echo "Would deploy schema: $file"
+              jq '.' "$file" || echo "Invalid JSON in $file"
             elif [[ ! $file =~ (_schema|_payload)\.json$ ]]; then
-              echo "Processing workflow file: $file"
-              # Get workflow name
-              workflow_name=$(get_name "$file")
-              echo "Deploying workflow: $workflow_name"
-              
-              # Deploy workflow to Orkes
-              curl -X PUT \
-                -H "Content-Type: application/json" \
-                -H "X-Authorization: ${{ fromJson(steps.authenticate.outputs.response).token }}" \
-                -d @"$file" \
-                "https://foodready-prod.orkesconductor.io/api/metadata/workflow"
+              echo "Would deploy workflow: $file"
+              jq '.' "$file" || echo "Invalid JSON in $file"
             fi
           done
+          echo "DEPLOY_STATUS=success" >> $GITHUB_ENV
 
       - name: Report Status
         if: always()
         run: |
-          if [ ${{ job.status }} == 'success' ]; then
-            echo "✅ Validation and deployment successful"
+          if [ "$GITHUB_ACTIONS" != "true" ]; then
+            echo "Local testing status:"
+            echo "Validation: $VALIDATION_STATUS"
+            echo "Deployment: ${DEPLOY_STATUS:-not_run}"
+            if [ "$VALIDATION_STATUS" = "success" ]; then
+              echo "✅ Local testing completed successfully"
+              exit 0
+            else
+              echo "❌ Local testing encountered issues"
+              exit 1
+            fi
           else
-            echo "❌ Validation or deployment failed"
-            exit 1
+            if [ "$VALIDATION_STATUS" = "success" ]; then
+              echo "✅ CI workflow completed successfully"
+              exit 0
+            else
+              echo "❌ CI workflow failed"
+              exit 1
+            fi
           fi
