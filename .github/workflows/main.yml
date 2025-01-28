@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**/*.json'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**/*.json'
+  workflow_dispatch:
+
+jobs:
+  validate-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Dependencies
+        run: |
+          npm init -y
+          npm install ajv ajv-formats glob
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v39
+        with:
+          files: |
+            **/*.json
+            !**/package*.json
+
+      - name: Run Validation
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          # Create validation script
+          cat > validate.js << 'EOL'
+          const OrkesValidator = require('./validator');
+          const validator = new OrkesValidator('./');
+          const isValid = validator.validateFiles();
+          process.exit(isValid ? 0 : 1);
+          EOL
+
+          # Copy validator class from repo
+          cp $GITHUB_WORKSPACE/validator.js .
+
+          # Run validation
+          node validate.js
+        id: validation
+
+      - name: Authenticate with Orkes
+        if: success() && steps.changed-files.outputs.any_changed == 'true'
+        id: authenticate
+        uses: fjogeleit/http-request-action@v1.9.1
+        with:
+          url: 'https://foodready-prod.orkesconductor.io/api/auth/login'
+          method: 'POST'
+          contentType: 'application/json'
+          data: '{"keyId": "${{ secrets.ORKES_REPO_KEY }}", "keySecret": "${{ secrets.ORKES_REPO_SECRET }}"}'
+
+      - name: Deploy to Orkes
+        if: success() && steps.changed-files.outputs.any_changed == 'true'
+        run: |
+          # Function to extract name from JSON file
+          get_name() {
+            local file=$1
+            name=$(cat $file | jq -r '.name')
+            echo $name
+          }
+
+          # Process changed files
+          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+            if [[ $file == *_schema.json ]]; then
+              echo "Processing schema file: $file"
+              # Deploy schema to Orkes
+              curl -X PUT \
+                -H "Content-Type: application/json" \
+                -H "X-Authorization: ${{ fromJson(steps.authenticate.outputs.response).token }}" \
+                -d @"$file" \
+                "https://foodready-prod.orkesconductor.io/api/metadata/workflow/schema"
+            elif [[ ! $file =~ (_schema|_payload)\.json$ ]]; then
+              echo "Processing workflow file: $file"
+              # Get workflow name
+              workflow_name=$(get_name "$file")
+              echo "Deploying workflow: $workflow_name"
+              
+              # Deploy workflow to Orkes
+              curl -X PUT \
+                -H "Content-Type: application/json" \
+                -H "X-Authorization: ${{ fromJson(steps.authenticate.outputs.response).token }}" \
+                -d @"$file" \
+                "https://foodready-prod.orkesconductor.io/api/metadata/workflow"
+            fi
+          done
+
+      - name: Report Status
+        if: always()
+        run: |
+          if [ ${{ job.status }} == 'success' ]; then
+            echo "✅ Validation and deployment successful"
+          else
+            echo "❌ Validation or deployment failed"
+            exit 1
+          fi

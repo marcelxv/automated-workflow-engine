@@ -1,0 +1,26 @@
+{
+  "name": "foodready-awe",
+  "version": "1.0.0",
+  "description": "Repository for version control, document and testing of workflows and workers for foodready Orkes",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "validate": "node validate.js",
+    "validate:watch": "nodemon --watch '**/*workflow.json' --watch '**/*schema.json' --exec 'npm run validate'",
+    "precommit": "npm run validate"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^2.1.1",
+    "glob": "^10.4.5"
+  },
+  "devDependencies": {
+    "husky": "^8.0.3",
+    "nodemon": "^3.0.2"
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "npm run precommit"
+    }
+  }
+}

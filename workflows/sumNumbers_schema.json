@@ -1,0 +1,33 @@
+{
+  "createTime": 1738011814588,
+  "updateTime": 1738011814588,
+  "createdBy": "marcel@foodready.ai",
+  "updatedBy": "marcel@foodready.ai",
+  "name": "TestingSchema_input",
+  "version": 1,
+  "type": "JSON",
+  "data": {
+    "$schema": "http://json-schema.org/draft-07/schema",
+    "type": "object",
+    "properties": {
+      "num1": {
+        "type": "number",
+        "description": "First number input for the testing workflow"
+      },
+      "num2": {
+        "type": "number",
+        "description": "Second number input for the testing workflow"
+      },
+      "payload": {
+        "type": "object",
+        "description": "Payload object for the testing workflow"
+      }
+    },
+    "required": [
+      "num1",
+      "num2"
+    ],
+    "additionalProperties": false
+  },
+  "description": "Input schema for Testing Schema workflow that validates two numeric inputs"
+}

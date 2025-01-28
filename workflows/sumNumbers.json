@@ -1,0 +1,64 @@
+{
+    "createTime": 1730411751238,
+    "updateTime": 1738011814588,
+    "name": "TestingSchema",
+    "description": "Testing Schema Feature",
+    "version": 1,
+    "tasks": [
+      {
+        "name": "testTask",
+        "taskReferenceName": "testTask_ref",
+        "inputParameters": {
+          "num1": "${workflow.input.num1}",
+          "num2": "${workflow.input.num2}"
+        },
+        "type": "SIMPLE",
+        "decisionCases": {},
+        "defaultCase": [],
+        "forkTasks": [],
+        "startDelay": 0,
+        "joinOn": [],
+        "optional": false,
+        "defaultExclusiveJoinTask": [],
+        "asyncComplete": false,
+        "loopOver": [],
+        "onStateChange": {},
+        "permissive": false
+      },
+      {
+        "name": "terminate",
+        "taskReferenceName": "terminate_ref",
+        "inputParameters": {
+          "terminationStatus": "COMPLETED"
+        },
+        "type": "TERMINATE",
+        "decisionCases": {},
+        "defaultCase": [],
+        "forkTasks": [],
+        "startDelay": 0,
+        "joinOn": [],
+        "optional": false,
+        "defaultExclusiveJoinTask": [],
+        "asyncComplete": false,
+        "loopOver": [],
+        "onStateChange": {},
+        "permissive": false
+      }
+    ],
+    "inputParameters": [
+      "num1",
+      "num2",
+      "payload"
+    ],
+    "outputParameters": {},
+    "failureWorkflow": "",
+    "schemaVersion": 2,
+    "restartable": true,
+    "workflowStatusListenerEnabled": false,
+    "ownerEmail": "marcel@foodready.ai",
+    "timeoutPolicy": "ALERT_ONLY",
+    "timeoutSeconds": 0,
+    "variables": {},
+    "inputTemplate": {},
+    "enforceSchema": false
+  }
