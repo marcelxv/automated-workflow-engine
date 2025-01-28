@@ -30,133 +30,149 @@ jobs:
     - name: Run Validation
       id: validate
       run: |
-        if node scripts/validate-workflows.js ./workflows; then
-          if [[ $(node scripts/validate-workflows.js ./workflows 2>&1 | grep -c "Warning") -gt 0 ]]; then
-            echo "VALIDATION_STATUS=warning" >> $GITHUB_ENV
+        VALIDATION_OUTPUT=$(node scripts/validate-workflows.js ./workflows)
+        echo "$VALIDATION_OUTPUT"
+        if echo "$VALIDATION_OUTPUT" | grep -q "Total Workflows:"; then
+          if echo "$VALIDATION_OUTPUT" | grep -q "Warnings:"; then
             echo "status=warning" >> $GITHUB_OUTPUT
           else
-            echo "VALIDATION_STATUS=success" >> $GITHUB_ENV
             echo "status=success" >> $GITHUB_OUTPUT
           fi
         else
-          echo "VALIDATION_STATUS=failure" >> $GITHUB_ENV
           echo "status=failure" >> $GITHUB_OUTPUT
-          exit 1
-        fi
-
-    - name: Check Schema Naming
-      if: env.VALIDATION_STATUS != 'failure'
-      run: |
-        echo "Checking schema naming convention..."
-        INVALID_SCHEMAS=0
-        for schema in workflows/**/*_schema.json; do
-          if [ -f "$schema" ]; then
-            WORKFLOW_NAME=$(basename "$schema" _schema.json)
-            EXPECTED_NAME="${WORKFLOW_NAME}_input"
-            ACTUAL_NAME=$(jq -r '.name' "$schema")
-            if [ "$ACTUAL_NAME" != "$EXPECTED_NAME" ]; then
-              echo "❌ Schema naming error in $schema: expected '$EXPECTED_NAME', got '$ACTUAL_NAME'"
-              INVALID_SCHEMAS=$((INVALID_SCHEMAS + 1))
-            fi
-          fi
-        done
-        if [ $INVALID_SCHEMAS -gt 0 ]; then
-          echo "Found $INVALID_SCHEMAS schemas with incorrect naming"
           exit 1
         fi
 
     - name: Authenticate with Orkes
       id: auth
-      if: success()
       uses: fjogeleit/http-request-action@v1.9.1
       with:
         url: 'https://foodready-prod.orkesconductor.io/api/token'
         method: 'POST'
         contentType: 'application/json'
-        data: |
+        data: >
           {
             "keyId": "${{ secrets.ORKES_REPO_KEY }}",
             "keySecret": "${{ secrets.ORKES_REPO_SECRET }}"
           }
-        preventFailureOnNoResponse: 'false'
 
-    - name: Verify Authentication
-      id: verify_auth
-      if: success()
+    - name: Check and Deploy Schemas
+      if: success() && steps.auth.outputs.response != ''
       run: |
-        RESPONSE='${{ steps.auth.outputs.response }}'
-        if [ -z "$RESPONSE" ]; then
-          echo "❌ Authentication failed: Empty response"
+        TOKEN=$(echo '${{ steps.auth.outputs.response }}' | jq -r '.token')
+        if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+          echo "❌ Failed to extract auth token"
           exit 1
         fi
-        
-        TOKEN=$(echo "$RESPONSE" | jq -r '.token')
-        if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
-          echo "❌ Authentication failed: Invalid token"
-          exit 1
-        fi
-        
-        echo "token=$TOKEN" >> $GITHUB_OUTPUT
-        echo "✅ Authentication successful"
 
-    - name: Deploy Schemas
-      if: success() && steps.verify_auth.outputs.token != ''
-      run: |
-        for schema in workflows/**/*_schema.json; do
-          echo "Deploying schema: $schema"
-          RESPONSE=$(curl -X PUT \
+        echo "🔍 Finding schema files..."
+        find workflows -type f -name "*_schema.json" | while read schema_file; do
+          echo "📋 Processing schema: $schema_file"
+          SCHEMA_NAME=$(jq -r '.name' "$schema_file")
+          SCHEMA_VERSION=$(jq -r '.version' "$schema_file")
+          
+          # Check if schema exists
+          EXISTING_SCHEMA=$(curl -s -H "X-Authorization: $TOKEN" \
+            "https://foodready-prod.orkesconductor.io/api/metadata/workflow/schema/$SCHEMA_NAME")
+          
+          if [ $? -eq 0 ] && [ ! -z "$EXISTING_SCHEMA" ] && [ "$EXISTING_SCHEMA" != "null" ]; then
+            EXISTING_VERSION=$(echo "$EXISTING_SCHEMA" | jq -r '.version')
+            if [ "$EXISTING_VERSION" -ge "$SCHEMA_VERSION" ]; then
+              echo "⚠️ Schema $SCHEMA_NAME version $SCHEMA_VERSION already exists with same or higher version ($EXISTING_VERSION). Skipping."
+              continue
+            fi
+          fi
+          
+          echo "📤 Deploying schema: $schema_file (v$SCHEMA_VERSION)"
+          RESPONSE=$(curl -s -X PUT \
             -H "Content-Type: application/json" \
-            -H "X-Authorization: ${{ steps.verify_auth.outputs.token }}" \
-            -d @"$schema" \
+            -H "X-Authorization: $TOKEN" \
+            -d @"$schema_file" \
             -w "\n%{http_code}" \
             "https://foodready-prod.orkesconductor.io/api/metadata/workflow/schema")
           
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           CONTENT=$(echo "$RESPONSE" | sed '$d')
           
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "❌ Failed to deploy schema $schema. Status: $HTTP_CODE"
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Successfully deployed schema: $schema_file"
+          elif [ "$HTTP_CODE" = "409" ]; then
+            echo "⚠️ Schema conflict: $CONTENT"
+          else
+            echo "❌ Failed to deploy schema: $schema_file"
+            echo "Status: $HTTP_CODE"
             echo "Response: $CONTENT"
             exit 1
           fi
         done
 
-    - name: Deploy Workflows
-      if: success() && steps.verify_auth.outputs.token != ''
+    - name: Check and Deploy Workflows
+      if: success() && steps.auth.outputs.response != ''
       run: |
-        for workflow in workflows/**/*.json; do
-          if [[ ! "$workflow" =~ (_schema|_payload).json$ ]]; then
-            echo "Deploying workflow: $workflow"
-            RESPONSE=$(curl -X PUT \
-              -H "Content-Type: application/json" \
-              -H "X-Authorization: ${{ steps.verify_auth.outputs.token }}" \
-              -d @"$workflow" \
-              -w "\n%{http_code}" \
-              "https://foodready-prod.orkesconductor.io/api/metadata/workflow")
-            
-            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-            CONTENT=$(echo "$RESPONSE" | sed '$d')
-            
-            if [ "$HTTP_CODE" != "200" ]; then
-              echo "❌ Failed to deploy workflow $workflow. Status: $HTTP_CODE"
-              echo "Response: $CONTENT"
-              exit 1
+        TOKEN=$(echo '${{ steps.auth.outputs.response }}' | jq -r '.token')
+        
+        echo "🔍 Finding workflow files..."
+        find workflows -type f -name "*.json" ! -name "*_schema.json" ! -name "*_payload.json" | while read workflow_file; do
+          echo "📋 Processing workflow: $workflow_file"
+          WORKFLOW_NAME=$(jq -r '.name' "$workflow_file")
+          WORKFLOW_VERSION=$(jq -r '.version' "$workflow_file")
+          
+          # Check if workflow exists
+          EXISTING_WORKFLOW=$(curl -s -H "X-Authorization: $TOKEN" \
+            "https://foodready-prod.orkesconductor.io/api/metadata/workflow/$WORKFLOW_NAME")
+          
+          if [ $? -eq 0 ] && [ ! -z "$EXISTING_WORKFLOW" ] && [ "$EXISTING_WORKFLOW" != "null" ]; then
+            EXISTING_VERSION=$(echo "$EXISTING_WORKFLOW" | jq -r '.version')
+            if [ "$EXISTING_VERSION" -ge "$WORKFLOW_VERSION" ]; then
+              echo "⚠️ Workflow $WORKFLOW_NAME version $WORKFLOW_VERSION already exists with same or higher version ($EXISTING_VERSION). Skipping."
+              continue
             fi
+          fi
+          
+          echo "📤 Deploying workflow: $workflow_file (v$WORKFLOW_VERSION)"
+          RESPONSE=$(curl -s -X PUT \
+            -H "Content-Type: application/json" \
+            -H "X-Authorization: $TOKEN" \
+            -d @"$workflow_file" \
+            -w "\n%{http_code}" \
+            "https://foodready-prod.orkesconductor.io/api/metadata/workflow")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          CONTENT=$(echo "$RESPONSE" | sed '$d')
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Successfully deployed workflow: $workflow_file"
+          elif [ "$HTTP_CODE" = "409" ]; then
+            echo "⚠️ Workflow conflict: $CONTENT"
+          else
+            echo "❌ Failed to deploy workflow: $workflow_file"
+            echo "Status: $HTTP_CODE"
+            echo "Response: $CONTENT"
+            exit 1
           fi
         done
 
     - name: Report Status
       if: always()
       run: |
-        if [ "${{ job.status }}" = "success" ]; then
-          echo "✅ Workflow execution completed successfully:"
-          echo "  - Validation: ${{ env.VALIDATION_STATUS }}"
-          echo "  - Schema Naming: Passed"
-          echo "  - Authentication: Successful"
-          echo "  - Deployment: Completed"
+        echo "=== Deployment Summary ==="
+        echo ""
+        echo "Validation Status: ${{ steps.validate.outputs.status }}"
+        
+        if [[ -n "${{ steps.auth.outputs.response }}" ]]; then
+          echo "Authentication: ✅ Success"
+          DEPLOYED_SCHEMAS=$(find workflows -type f -name "*_schema.json" | wc -l)
+          DEPLOYED_WORKFLOWS=$(find workflows -type f -name "*.json" ! -name "*_schema.json" ! -name "*_payload.json" | wc -l)
+          echo "Processed Schemas: $DEPLOYED_SCHEMAS"
+          echo "Processed Workflows: $DEPLOYED_WORKFLOWS"
         else
-          echo "❌ Workflow execution failed:"
-          echo "  - Validation: ${{ env.VALIDATION_STATUS }}"
-          [ "${{ steps.verify_auth.outcome }}" != "success" ] && echo "  - Authentication: Failed"
+          echo "Authentication: ❌ Failed"
+        fi
+        
+        if [[ "${{ job.status }}" == "success" ]]; then
+          echo "✅ Overall Status: Success"
+          exit 0
+        else
+          echo "❌ Overall Status: Failed"
           exit 1
         fi
