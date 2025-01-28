@@ -41,14 +41,14 @@ jobs:
         run: |
           # Create validation script
           cat > validate.js << 'EOL'
-          const OrkesValidator = require('./validator');
+          const OrkesValidator = require('./scripts/validate-workflows');
           const validator = new OrkesValidator('./');
           const isValid = validator.validateFiles();
           process.exit(isValid ? 0 : 1);
           EOL
 
           # Copy validator class from repo
-          cp $GITHUB_WORKSPACE/validator.js .
+          cp $GITHUB_WORKSPACE/.github/scripts/validate-workflows.js ./scripts/validate-workflows.js
 
           # Run validation
           node validate.js
