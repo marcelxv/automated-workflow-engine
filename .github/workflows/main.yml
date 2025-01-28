@@ -4,103 +4,77 @@ on:
   push:
     branches: [ main ]
     paths:
-      - '**/*.json'
+      - 'workflows/**/*.json'
   pull_request:
     branches: [ main ]
     paths:
-      - '**/*.json'
+      - 'workflows/**/*.json'
   workflow_dispatch:
 
 jobs:
-  validate-and-deploy:
+  deploy-workflows:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
+    - name: Checkout
+      uses: actions/checkout@v2
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
 
-      - name: Install Dependencies
-        run: |
-          npm init -y
-          npm install ajv ajv-formats glob
+    - name: Install Dependencies
+      run: |
+        npm init -y
+        npm install ajv ajv-formats glob
 
-      - name: Get changed files
-        id: changed-files
-        uses: tj-actions/changed-files@v39
-        with:
-          files: |
-            workflows/**/*.json
-            !**/package*.json
+    - name: Run Validation
+      id: validate
+      run: |
+        if node scripts/validate-workflows.js ./workflows; then
+          echo "status=success" >> "$GITHUB_OUTPUT"
+        else
+          echo "status=failure" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
 
-      - name: Run Workflow Validation
-        id: validation
-        if: steps.changed-files.outputs.any_changed == 'true'
-        run: |
-          if node scripts/validate-workflows.js ./workflows; then
-            echo "VALIDATION_PASSED=true" >> $GITHUB_ENV
-          else
-            echo "VALIDATION_PASSED=false" >> $GITHUB_ENV
-            exit 1
-          fi
+    - name: Authenticate with Orkes
+      if: steps.validate.outputs.status == 'success'
+      id: authenticate
+      uses: fjogeleit/http-request-action@v1.9.1
+      with:
+        url: 'https://foodready-prod.orkesconductor.io/api/auth/login'
+        method: 'POST'
+        contentType: 'application/json'
+        data: '{"keyId": "${{ secrets.ORKES_REPO_KEY }}", "keySecret": "${{ secrets.ORKES_REPO_SECRET }}"}'
 
-      - name: Authenticate with Orkes
-        if: env.VALIDATION_PASSED == 'true'
-        id: authenticate
-        uses: fjogeleit/http-request-action@v1.9.1
-        with:
-          url: 'https://foodready-prod.orkesconductor.io/api/auth/login'
-          method: 'POST'
-          contentType: 'application/json'
-          data: |
-            {
-              "keyId": "${{ secrets.ORKES_REPO_KEY }}",
-              "keySecret": "${{ secrets.ORKES_REPO_SECRET }}"
-            }
+    - name: Deploy Schemas
+      if: steps.validate.outputs.status == 'success'
+      uses: fjogeleit/http-request-action@v1.9.1
+      with:
+        url: 'https://foodready-prod.orkesconductor.io/api/metadata/workflow/schema'
+        method: 'PUT'
+        customHeaders: '{"X-Authorization": "${{ fromJson(steps.authenticate.outputs.response).token }}"}'
+        contentType: 'application/json'
+        files: '["workflows/**/*_schema.json"]'
 
-      - name: Deploy to Orkes
-        if: env.VALIDATION_PASSED == 'true' && steps.authenticate.outputs.response != ''
-        env:
-          ORKES_TOKEN: ${{ fromJson(steps.authenticate.outputs.response).token }}
-        run: |
-          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
-            if [[ $file == *_schema.json ]]; then
-              echo "Deploying schema: $file"
-              curl -X PUT \
-                -H "Content-Type: application/json" \
-                -H "X-Authorization: $ORKES_TOKEN" \
-                -d @"$file" \
-                "https://foodready-prod.orkesconductor.io/api/metadata/workflow/schema"
-              
-            elif [[ ! $file =~ (_schema|_payload)\.json$ ]]; then
-              echo "Deploying workflow: $file"
-              workflow_name=$(jq -r '.name' "$file")
-              echo "Workflow name: $workflow_name"
-              
-              curl -X PUT \
-                -H "Content-Type: application/json" \
-                -H "X-Authorization: $ORKES_TOKEN" \
-                -d @"$file" \
-                "https://foodready-prod.orkesconductor.io/api/metadata/workflow"
-            fi
-          done
+    - name: Deploy Workflows
+      if: steps.validate.outputs.status == 'success'
+      uses: fjogeleit/http-request-action@v1.9.1
+      with:
+        url: 'https://foodready-prod.orkesconductor.io/api/metadata/workflow'
+        method: 'PUT'
+        customHeaders: '{"X-Authorization": "${{ fromJson(steps.authenticate.outputs.response).token }}"}'
+        contentType: 'application/json'
+        files: '["workflows/**/*.json", "!workflows/**/*_schema.json", "!workflows/**/*_payload.json"]'
 
-      - name: Report Status
-        if: always()
-        run: |
-          if [[ "${{ env.VALIDATION_PASSED }}" == "true" && -n "${{ steps.authenticate.outputs.response }}" ]]; then
-            echo "✅ Validation and deployment successful"
-            exit 0
-          else
-            echo "❌ Process failed"
-            if [[ "${{ env.VALIDATION_PASSED }}" != "true" ]]; then
-              echo "Validation failed"
-            fi
-            if [[ -z "${{ steps.authenticate.outputs.response }}" ]]; then
-              echo "Authentication failed"
-            fi
-            exit 1
-          fi
+    - name: Report Status
+      if: always()
+      run: |
+        if [[ "${{ steps.validate.outputs.status }}" == "success" ]]; then
+          echo "✅ Workflow deployment completed successfully"
+        else
+          echo "❌ Workflow deployment failed"
+          echo "Check validation results and credentials"
+          exit 1
+        fi
