@@ -10,8 +10,9 @@ const path = require('path');
 const glob = require('glob');
 
 class OrkesValidator {
-    constructor(workflowsPath = './') {
-        this.workflowsPath = workflowsPath;
+    constructor(workflowsPath = './workflows') {
+        // Always ensure we're looking in the workflows directory
+        this.workflowsPath = workflowsPath.endsWith('workflows') ? workflowsPath : path.join(workflowsPath, 'workflows');
         this.errors = [];
         this.warnings = [];
     }
@@ -30,39 +31,46 @@ class OrkesValidator {
         console.log(`✅ ${message}`);
     }
 
-    // Find all workflow base names (without extensions)
-    findWorkflowSets() {
-        const allFiles = glob.sync(path.join(this.workflowsPath, '**/*.json'));
-        const workflowSets = new Set();
+    validateWorkflowSchemaExistence(workflowFile) {
+        try {
+            // Get base name of the workflow file
+            const workflowPath = path.dirname(workflowFile);
+            const workflowBaseName = path.basename(workflowFile, '.json');
+            const schemaFile = path.join(workflowPath, `${workflowBaseName}_schema.json`);
 
-        allFiles.forEach(file => {
-            const filename = path.basename(file);
-            // Match files that don't end with _schema or _payload
-            if (!filename.endsWith('_schema.json') && !filename.endsWith('_payload.json')) {
-                const baseName = path.basename(file, '.json');
-                const schemaFile = path.join(path.dirname(file), `${baseName}_schema.json`);
-                const payloadFile = path.join(path.dirname(file), `${baseName}_payload.json`);
-                
-                // Only add if schema and payload files exist
-                if (fs.existsSync(schemaFile) && fs.existsSync(payloadFile)) {
-                    workflowSets.add({
-                        workflow: file,
-                        schema: schemaFile,
-                        payload: payloadFile,
-                        baseName: baseName
-                    });
-                }
+            // Check if schema file exists
+            if (!fs.existsSync(schemaFile)) {
+                this.logError(`No schema file found for workflow ${workflowFile}`);
+                this.logError(`Expected schema file at: ${schemaFile}`);
+                return null;
             }
-        });
 
-        return Array.from(workflowSets);
+            // Read and parse both files to verify they're valid JSON
+            const workflow = JSON.parse(fs.readFileSync(workflowFile, 'utf8'));
+            const schema = JSON.parse(fs.readFileSync(schemaFile, 'utf8'));
+
+            // Verify workflow name matches schema name convention
+            const expectedSchemaName = `${workflow.name}_input`;
+            if (schema.name !== expectedSchemaName) {
+                this.logWarning(`Schema name mismatch: expected '${expectedSchemaName}', got '${schema.name}'`);
+            }
+
+            return {
+                workflow,
+                schema,
+                schemaFile
+            };
+        } catch (error) {
+            this.logError(`Error validating workflow-schema relationship for ${workflowFile}: ${error.message}`);
+            return null;
+        }
     }
 
-    // Previous validation methods remain the same
     validateWorkflowDefinition(workflowFile) {
         try {
             const workflow = JSON.parse(fs.readFileSync(workflowFile, 'utf8'));
             
+            // Validate basic workflow structure
             const requiredFields = ['name', 'version', 'tasks', 'inputParameters'];
             const missingFields = requiredFields.filter(field => !workflow.hasOwnProperty(field));
             
@@ -70,6 +78,23 @@ class OrkesValidator {
                 this.logError(`Workflow ${workflowFile} is missing required fields: ${missingFields.join(', ')}`);
                 return null;
             }
+
+            // Validate tasks array
+            if (!Array.isArray(workflow.tasks)) {
+                this.logError(`Workflow ${workflowFile} tasks must be an array`);
+                return null;
+            }
+
+            // Validate each task
+            workflow.tasks.forEach((task, index) => {
+                const taskRequiredFields = ['name', 'taskReferenceName', 'type'];
+                const missingTaskFields = taskRequiredFields.filter(field => !task.hasOwnProperty(field));
+                
+                if (missingTaskFields.length > 0) {
+                    this.logError(`Task ${index} in workflow ${workflowFile} is missing required fields: ${missingTaskFields.join(', ')}`);
+                    return null;
+                }
+            });
 
             return workflow;
         } catch (error) {
@@ -79,10 +104,10 @@ class OrkesValidator {
     }
 
     validateSchemaDefinition(schemaFile) {
-        // Previous implementation remains the same
         try {
             const schema = JSON.parse(fs.readFileSync(schemaFile, 'utf8'));
             
+            // Validate schema structure
             const requiredFields = ['name', 'version', 'type', 'data'];
             const missingFields = requiredFields.filter(field => !schema.hasOwnProperty(field));
             
@@ -96,6 +121,7 @@ class OrkesValidator {
                 return null;
             }
 
+            // Validate data schema structure
             if (!schema.data.$schema || !schema.data.type || !schema.data.properties) {
                 this.logError(`Schema ${schemaFile} has invalid JSON Schema structure in data field`);
                 return null;
@@ -109,16 +135,18 @@ class OrkesValidator {
     }
 
     validateWorkflowAgainstSchema(workflow, schema) {
-        // Previous implementation remains the same
+        // Validate input parameters against schema
         const schemaProperties = Object.keys(schema.data.properties);
         const workflowInputs = workflow.inputParameters;
 
+        // Check for workflow inputs not defined in schema
         const undefinedInputs = workflowInputs.filter(input => !schemaProperties.includes(input));
         if (undefinedInputs.length > 0) {
             this.logError(`Workflow input parameters not defined in schema: ${undefinedInputs.join(', ')}`);
             return false;
         }
 
+        // Check for required schema properties not in workflow inputs
         const requiredProperties = schema.data.required || [];
         const missingInputs = requiredProperties.filter(prop => !workflowInputs.includes(prop));
         if (missingInputs.length > 0) {
@@ -126,6 +154,7 @@ class OrkesValidator {
             return false;
         }
 
+        // Validate task input references
         for (const task of workflow.tasks) {
             if (task.inputParameters) {
                 for (const [key, value] of Object.entries(task.inputParameters)) {
@@ -135,6 +164,7 @@ class OrkesValidator {
                             const param = match.match(/\${workflow\.input\.([\w.-]+)}/)[1];
                             if (!workflowInputs.includes(param)) {
                                 this.logError(`Task "${task.name}" references undefined input parameter: ${param}`);
+                                return false;
                             }
                         });
                     }
@@ -146,8 +176,8 @@ class OrkesValidator {
     }
 
     validatePayload(payload, schema, payloadFile) {
-        // Previous implementation remains the same
         try {
+            // Extract the actual JSON schema from the schema definition
             const validate = ajv.compile(schema.data);
             const valid = validate(payload);
 
@@ -167,59 +197,108 @@ class OrkesValidator {
         }
     }
 
-    validateFiles() {
-        const workflowSets = this.findWorkflowSets();
-        let hasError = false;
+    findWorkflowFiles() {
+        // Explicitly look only in the workflows directory and ignore node_modules
+        const workflowFiles = glob.sync('**/*.json', {
+            cwd: this.workflowsPath,
+            ignore: ['node_modules/**', '**/package*.json', '**/*_schema.json', '**/*_payload.json'],
+            absolute: true
+        });
 
-        if (workflowSets.length === 0) {
-            this.logWarning('No complete workflow sets found. Each workflow should have corresponding _schema.json and _payload.json files.');
+        return workflowFiles;
+    }
+
+    validateFiles() {
+        // Ensure workflows directory exists
+        if (!fs.existsSync(this.workflowsPath)) {
+            this.logError(`Workflows directory not found at: ${this.workflowsPath}`);
             return false;
         }
 
-        workflowSets.forEach(({workflow, schema, payload, baseName}) => {
-            console.log(`\nValidating workflow set: ${baseName}`);
+        const workflowFiles = this.findWorkflowFiles();
+        let hasError = false;
+
+        if (workflowFiles.length === 0) {
+            this.logWarning('No workflow files found in workflows directory.');
+            return false;
+        }
+
+        console.log(`Found ${workflowFiles.length} workflow files to validate in ${this.workflowsPath}`);
+
+        workflowFiles.forEach(workflowFile => {
+            console.log(`\nValidating workflow: ${workflowFile}`);
+
+            // First, validate workflow-schema existence and relationship
+            const workflowSet = this.validateWorkflowSchemaExistence(workflowFile);
+            if (!workflowSet) {
+                hasError = true;
+                return;
+            }
 
             try {
+                const { workflow, schema, schemaFile } = workflowSet;
+
                 // Validate workflow definition
-                const workflowDef = this.validateWorkflowDefinition(workflow);
-                if (!workflowDef) {
+                const workflowValid = this.validateWorkflowDefinition(workflowFile);
+                if (!workflowValid) {
                     hasError = true;
                     return;
                 }
 
                 // Validate schema definition
-                const schemaDef = this.validateSchemaDefinition(schema);
-                if (!schemaDef) {
+                const schemaValid = this.validateSchemaDefinition(schemaFile);
+                if (!schemaValid) {
                     hasError = true;
                     return;
                 }
 
                 // Validate workflow against schema
-                if (!this.validateWorkflowAgainstSchema(workflowDef, schemaDef)) {
+                if (!this.validateWorkflowAgainstSchema(workflow, schema)) {
                     hasError = true;
                     return;
                 }
 
-                // Validate payload against schema
-                const payloadData = JSON.parse(fs.readFileSync(payload, 'utf8'));
-                if (!this.validatePayload(payloadData, schemaDef, payload)) {
-                    hasError = true;
-                    return;
+                // Check for and validate payload if it exists
+                const payloadFile = workflowFile.replace('.json', '_payload.json');
+                if (fs.existsSync(payloadFile)) {
+                    const payloadData = JSON.parse(fs.readFileSync(payloadFile, 'utf8'));
+                    if (!this.validatePayload(payloadData, schema, payloadFile)) {
+                        hasError = true;
+                        return;
+                    }
+                } else {
+                    this.logWarning(`No payload file found at: ${payloadFile}`);
                 }
 
-                this.logSuccess(`All validations passed for workflow set: ${baseName}`);
+                this.logSuccess(`All validations passed for workflow: ${workflowFile}`);
 
             } catch (error) {
-                this.logError(`Error processing workflow set ${baseName}: ${error.message}`);
+                this.logError(`Error processing workflow ${workflowFile}: ${error.message}`);
                 hasError = true;
             }
         });
 
-        // Print summary
+        // Print summary with proper error counting
         console.log('\n=== Validation Summary ===');
-        console.log(`Total Workflow Sets: ${workflowSets.length}`);
+        console.log(`Total Workflows: ${workflowFiles.length}`);
         console.log(`Errors: ${this.errors.length}`);
         console.log(`Warnings: ${this.warnings.length}`);
+
+        // Print detailed errors if any
+        if (this.errors.length > 0) {
+            console.log('\nErrors:');
+            this.errors.forEach((error, index) => {
+                console.log(`${index + 1}. ${error}`);
+            });
+        }
+
+        // Print warnings if any
+        if (this.warnings.length > 0) {
+            console.log('\nWarnings:');
+            this.warnings.forEach((warning, index) => {
+                console.log(`${index + 1}. ${warning}`);
+            });
+        }
 
         return !hasError;
     }

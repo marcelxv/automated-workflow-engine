@@ -1,8 +1,8 @@
 {
     "createTime": 1730411751238,
     "updateTime": 1738011814588,
-    "name": "TestingSchema",
-    "description": "Testing Schema Feature",
+    "name": "substract",
+    "description": "Workflow to test the substract task",
     "version": 1,
     "tasks": [
       {
@@ -47,8 +47,7 @@
     ],
     "inputParameters": [
       "num1",
-      "num2",
-      "payload"
+      "num2"
     ],
     "outputParameters": {},
     "failureWorkflow": "",

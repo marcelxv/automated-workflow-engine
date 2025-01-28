@@ -1,8 +1,8 @@
 {
     "createTime": 1730411751238,
     "updateTime": 1738011814588,
-    "name": "TestingSchema",
-    "description": "Testing Schema Feature",
+    "name": "sumNumbers",
+    "description": "Workflow to test the sum task",
     "version": 1,
     "tasks": [
       {
