@@ -3,7 +3,7 @@
     "updateTime": 1738011814588,
     "name": "substract",
     "description": "Workflow to test the substract task",
-    "version": 1,
+    "version": 3,
     "tasks": [
       {
         "name": "testTask",
