@@ -43,6 +43,22 @@ jobs:
           exit 1
         fi
 
+    - name: Prepare Workflows with Schemas
+      if: success()
+      run: |
+        mkdir -p .tmp/workflows
+        echo "🔍 Processing workflow files..."
+        
+        find workflows -type f -name "*.json" ! -name "*_schema.json" ! -name "*_payload.json" | while read file; do
+          echo "Processing workflow: $file"
+          node -e "
+            const { injectSchema } = require('./scripts/schemaInjector');
+            const fs = require('fs');
+            const workflow = injectSchema('$file');
+            fs.writeFileSync('.tmp/${file}', JSON.stringify(workflow, null, 2));
+          "
+        done
+
     - name: Authenticate with Orkes
       id: auth
       uses: fjogeleit/http-request-action@v1.9.1
@@ -56,7 +72,7 @@ jobs:
             "keySecret": "${{ secrets.ORKES_REPO_SECRET }}"
           }
 
-    - name: Deploy Schemas and Workflows
+    - name: Deploy Workflows
       if: success() && steps.auth.outputs.response != ''
       run: |
         TOKEN=$(echo '${{ steps.auth.outputs.response }}' | jq -r '.token')
@@ -65,49 +81,26 @@ jobs:
           exit 1
         fi
         
-        echo "🔍 Processing workflow files..."
-        find workflows -type f -name "*.json" ! -name "*_payload.json" | while read file; do
-          if [[ "$file" == *"_schema.json" ]]; then
-            echo "📤 Deploying schema: $file"
-            RESPONSE=$(curl -s -X POST \
-              -H "Content-Type: application/json" \
-              -H "X-Authorization: $TOKEN" \
-              -d @"$file" \
-              -w "\n%{http_code}" \
-              "https://foodready-prod.orkesconductor.io/api/schema")
-            
-            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-            CONTENT=$(echo "$RESPONSE" | sed '$d')
-            
-            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
-              echo "✅ Successfully registered schema: $file"
-            else
-              echo "❌ Failed to register schema: $file"
-              echo "Status: $HTTP_CODE"
-              echo "Response: $CONTENT"
-              # Don't exit on schema failure, continue with workflow
-              continue
-            fi
+        echo "📤 Deploying workflows..."
+        find .tmp/workflows -type f -name "*.json" | while read file; do
+          echo "Deploying workflow: $file"
+          RESPONSE=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Authorization: $TOKEN" \
+            -d @"$file" \
+            -w "\n%{http_code}" \
+            "https://foodready-prod.orkesconductor.io/api/metadata/workflow")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          CONTENT=$(echo "$RESPONSE" | sed '$d')
+          
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+            echo "✅ Successfully deployed workflow: $file"
           else
-            echo "📤 Deploying workflow: $file"
-            RESPONSE=$(curl -s -X POST \
-              -H "Content-Type: application/json" \
-              -H "X-Authorization: $TOKEN" \
-              -d @"$file" \
-              -w "\n%{http_code}" \
-              "https://foodready-prod.orkesconductor.io/api/metadata/workflow")
-            
-            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-            CONTENT=$(echo "$RESPONSE" | sed '$d')
-            
-            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
-              echo "✅ Successfully deployed workflow: $file"
-            else
-              echo "❌ Failed to deploy workflow: $file"
-              echo "Status: $HTTP_CODE"
-              echo "Response: $CONTENT"
-              exit 1
-            fi
+            echo "❌ Failed to deploy workflow: $file"
+            echo "Status: $HTTP_CODE"
+            echo "Response: $CONTENT"
+            exit 1
           fi
         done
 
@@ -120,10 +113,20 @@ jobs:
         
         if [[ -n "${{ steps.auth.outputs.response }}" ]]; then
           echo "Authentication: ✅ Success"
-          TOTAL_SCHEMAS=$(find workflows -type f -name "*_schema.json" | wc -l)
-          TOTAL_WORKFLOWS=$(find workflows -type f -name "*.json" ! -name "*_schema.json" ! -name "*_payload.json" | wc -l)
-          echo "Processed Schemas: $TOTAL_SCHEMAS"
+          TOTAL_WORKFLOWS=$(find .tmp/workflows -type f -name "*.json" | wc -l)
           echo "Processed Workflows: $TOTAL_WORKFLOWS"
+          
+          # Check for schema warnings
+          SCHEMAS_MISSING=$(find workflows -type f -name "*.json" ! -name "*_schema.json" ! -name "*_payload.json" | while read file; do
+            if [ ! -f "${file%.*}_schema.json" ]; then
+              echo "$file"
+            fi
+          done)
+          
+          if [ ! -z "$SCHEMAS_MISSING" ]; then
+            echo "⚠️ Workflows missing schema files:"
+            echo "$SCHEMAS_MISSING"
+          fi
         else
           echo "Authentication: ❌ Failed"
         fi
