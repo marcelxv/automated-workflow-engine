@@ -1,3 +1,4 @@
+// schemaInjector.js
 const fs = require('fs');
 const path = require('path');
 
@@ -15,21 +16,11 @@ function injectSchema(workflowPath) {
 
         const schemaContent = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
 
-        // Create schema object for workflow
-        const schema = {
-            createTime: Date.now(),
-            updatedTime: Date.now(),
-            createdBy: "workflow-automation",
-            updatedBy: "workflow-automation",
-            data: schemaContent.data,
-            name: `${workflowContent.name}_input`,
-            ownerApp: "conductor",
-            version: workflowContent.version,
+        // Create simple inputSchema object
+        workflowContent.inputSchema = {
+            name: `${workflowName}_schema`,
             type: "JSON"
         };
-
-        // Add schema to workflow
-        workflowContent.schema = schema;
 
         return workflowContent;
     } catch (error) {
