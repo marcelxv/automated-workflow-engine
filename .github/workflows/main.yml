@@ -4,107 +4,137 @@ on:
   push:
     branches: [ main ]
     paths:
-      - '**/*.json'
+      - 'workflows/**/*.json'
   pull_request:
     branches: [ main ]
     paths:
-      - '**/*.json'
+      - 'workflows/**/*.json'
   workflow_dispatch:
 
 jobs:
-  validate-and-deploy:
+  deploy-workflows:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
+    - name: Checkout
+      uses: actions/checkout@v2
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
 
-      - name: Install Dependencies
-        run: |
-          npm init -y
-          npm install ajv ajv-formats glob
+    - name: Install Dependencies
+      run: |
+        npm install ajv ajv-formats glob --no-package-lock
 
-      - name: Get changed files
-        id: changed-files
-        uses: tj-actions/changed-files@v39
-        with:
-          files: |
-            **/*.json
-            !**/package*.json
+    - name: Run Validation
+      id: validate
+      run: |
+        VALIDATION_OUTPUT=$(node scripts/validate-workflows.js ./workflows)
+        echo "$VALIDATION_OUTPUT"
+        if echo "$VALIDATION_OUTPUT" | grep -q "Total Workflows:"; then
+          if echo "$VALIDATION_OUTPUT" | grep -q "Warnings:"; then
+            echo "status=warning" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "status=failure" >> $GITHUB_OUTPUT
+          exit 1
+        fi
 
-      - name: Run Validation
-        if: steps.changed-files.outputs.any_changed == 'true'
-        run: |
-          # Create validation script
-          cat > validate.js << 'EOL'
-          const OrkesValidator = require('./validator');
-          const validator = new OrkesValidator('./');
-          const isValid = validator.validateFiles();
-          process.exit(isValid ? 0 : 1);
-          EOL
+    - name: Prepare Workflows with Schemas
+      if: success()
+      run: |
+        mkdir -p .tmp/workflows
+        echo "🔍 Processing workflow files..."
+        
+        find workflows -type f -name "*.json" ! -name "*_schema.json" ! -name "*_payload.json" | while read file; do
+          echo "Processing workflow: $file"
+          node -e "
+            const { injectSchema } = require('./scripts/schemaInjector');
+            const fs = require('fs');
+            const workflow = injectSchema('$file');
+            fs.writeFileSync('.tmp/${file}', JSON.stringify(workflow, null, 2));
+          "
+        done
 
-          # Copy validator class from repo
-          cp $GITHUB_WORKSPACE/validator.js .
-
-          # Run validation
-          node validate.js
-        id: validation
-
-      - name: Authenticate with Orkes
-        if: success() && steps.changed-files.outputs.any_changed == 'true'
-        id: authenticate
-        uses: fjogeleit/http-request-action@v1.9.1
-        with:
-          url: 'https://foodready-prod.orkesconductor.io/api/auth/login'
-          method: 'POST'
-          contentType: 'application/json'
-          data: '{"keyId": "${{ secrets.ORKES_REPO_KEY }}", "keySecret": "${{ secrets.ORKES_REPO_SECRET }}"}'
-
-      - name: Deploy to Orkes
-        if: success() && steps.changed-files.outputs.any_changed == 'true'
-        run: |
-          # Function to extract name from JSON file
-          get_name() {
-            local file=$1
-            name=$(cat $file | jq -r '.name')
-            echo $name
+    - name: Authenticate with Orkes
+      id: auth
+      uses: fjogeleit/http-request-action@v1.9.1
+      with:
+        url: 'https://foodready-prod.orkesconductor.io/api/token'
+        method: 'POST'
+        contentType: 'application/json'
+        data: >
+          {
+            "keyId": "${{ secrets.ORKES_REPO_KEY }}",
+            "keySecret": "${{ secrets.ORKES_REPO_SECRET }}"
           }
 
-          # Process changed files
-          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
-            if [[ $file == *_schema.json ]]; then
-              echo "Processing schema file: $file"
-              # Deploy schema to Orkes
-              curl -X PUT \
-                -H "Content-Type: application/json" \
-                -H "X-Authorization: ${{ fromJson(steps.authenticate.outputs.response).token }}" \
-                -d @"$file" \
-                "https://foodready-prod.orkesconductor.io/api/metadata/workflow/schema"
-            elif [[ ! $file =~ (_schema|_payload)\.json$ ]]; then
-              echo "Processing workflow file: $file"
-              # Get workflow name
-              workflow_name=$(get_name "$file")
-              echo "Deploying workflow: $workflow_name"
-              
-              # Deploy workflow to Orkes
-              curl -X PUT \
-                -H "Content-Type: application/json" \
-                -H "X-Authorization: ${{ fromJson(steps.authenticate.outputs.response).token }}" \
-                -d @"$file" \
-                "https://foodready-prod.orkesconductor.io/api/metadata/workflow"
-            fi
-          done
-
-      - name: Report Status
-        if: always()
-        run: |
-          if [ ${{ job.status }} == 'success' ]; then
-            echo "✅ Validation and deployment successful"
+    - name: Deploy Workflows
+      if: success() && steps.auth.outputs.response != ''
+      run: |
+        TOKEN=$(echo '${{ steps.auth.outputs.response }}' | jq -r '.token')
+        if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+          echo "❌ Failed to extract auth token"
+          exit 1
+        fi
+        
+        echo "📤 Deploying workflows..."
+        find .tmp/workflows -type f -name "*.json" | while read file; do
+          echo "Deploying workflow: $file"
+          RESPONSE=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Authorization: $TOKEN" \
+            -d @"$file" \
+            -w "\n%{http_code}" \
+            "https://foodready-prod.orkesconductor.io/api/metadata/workflow")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          CONTENT=$(echo "$RESPONSE" | sed '$d')
+          
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+            echo "✅ Successfully deployed workflow: $file"
           else
-            echo "❌ Validation or deployment failed"
+            echo "❌ Failed to deploy workflow: $file"
+            echo "Status: $HTTP_CODE"
+            echo "Response: $CONTENT"
             exit 1
           fi
+        done
+
+    - name: Report Status
+      if: always()
+      run: |
+        echo "=== Deployment Summary ==="
+        echo ""
+        echo "Validation Status: ${{ steps.validate.outputs.status }}"
+        
+        if [[ -n "${{ steps.auth.outputs.response }}" ]]; then
+          echo "Authentication: ✅ Success"
+          TOTAL_WORKFLOWS=$(find .tmp/workflows -type f -name "*.json" | wc -l)
+          echo "Processed Workflows: $TOTAL_WORKFLOWS"
+          
+          # Check for schema warnings
+          SCHEMAS_MISSING=$(find workflows -type f -name "*.json" ! -name "*_schema.json" ! -name "*_payload.json" | while read file; do
+            if [ ! -f "${file%.*}_schema.json" ]; then
+              echo "$file"
+            fi
+          done)
+          
+          if [ ! -z "$SCHEMAS_MISSING" ]; then
+            echo "⚠️ Workflows missing schema files:"
+            echo "$SCHEMAS_MISSING"
+          fi
+        else
+          echo "Authentication: ❌ Failed"
+        fi
+        
+        if [[ "${{ job.status }}" == "success" ]]; then
+          echo "✅ Overall Status: Success"
+          exit 0
+        else
+          echo "❌ Overall Status: Failed"
+          exit 1
+        fi

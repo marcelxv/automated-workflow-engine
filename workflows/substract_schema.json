@@ -3,7 +3,7 @@
   "updateTime": 1738011814588,
   "createdBy": "marcel@foodready.ai",
   "updatedBy": "marcel@foodready.ai",
-  "name": "sumNumbers_schema",
+  "name": "substract_schema",
   "version": 1,
   "type": "JSON",
   "data": {
@@ -17,10 +17,6 @@
       "num2": {
         "type": "number",
         "description": "Second number input for the testing workflow"
-      },
-      "payload": {
-        "type": "object",
-        "description": "Payload object for the testing workflow"
       }
     },
     "required": [

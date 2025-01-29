@@ -5,8 +5,8 @@
   "main": "index.js",
   "license": "MIT",
   "scripts": {
-    "validate": "node validate.js",
-    "validate:watch": "nodemon --watch '**/*workflow.json' --watch '**/*schema.json' --exec 'npm run validate'",
+    "validate": "node ./scripts/validate-workflows.js && node ./scripts/validate-workers.js",
+    "validate:watch": "nodemon --watch workflows --watch workers --exec 'npm run validate'",
     "precommit": "npm run validate"
   },
   "dependencies": {

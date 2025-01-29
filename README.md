@@ -1,143 +1,63 @@
-# FoodReady Automation Workflow Engine (AWE)
+# FoodReady Workflow Engine (AWE)
 
-A comprehensive platform for creating, testing, validating, and managing workflow automations in the FoodReady ecosystem. Built on top of Orkes Conductor, this system provides end-to-end workflow management with robust development and deployment capabilities.
+Centralized system for managing, validating, and deploying Orkes Conductor workflows. This repository serves as the single source of truth for all workflow definitions and their associated schemas.
 
-## Overview
-
-FoodReady AWE serves as the central hub for all workflow automation needs, enabling teams to:
-- Develop and test workflows locally
-- Validate workflow definitions against schemas
-- Maintain version control of workflows
-- Automate deployment to production
-- Ensure consistency across the automation pipeline
-
-## Features
-
-### Development Lifecycle Management
-- Local development environment setup
-- Workflow validation framework
-- Schema verification system
-- Test payload management
-- Worker function testing
-
-### Quality Assurance
-- Automated schema validation
-- Input parameter verification
-- Task reference checking
-- Payload testing
-- Worker function validation
-
-### Deployment & Version Control
-- Automated CI/CD pipeline
-- Production deployment automation
-- Version tracking
-- Rollback capabilities
-- Change history maintenance
-
-### Workflow Management
-- Centralized workflow repository
-- Schema definition management
-- Test case organization
-- Worker function library
-- Documentation generation
-
-## Project Structure
-
+## 📁 Repository Structure
 ```
 .
-├── workflows/                # Workflow definitions
-│   ├── production/          # Production workflows
-│   │   ├── workflow1.json
-│   │   ├── workflow1_schema.json
-│   │   └── workflow1_payload.json
-│   └── development/         # Development workflows
-├── workers/                 # Worker function definitions
-├── schemas/                 # Schema templates
-├── tests/                  # Test configurations
-├── .github/
-│   └── workflows/          # CI/CD configurations
-└── scripts/                # Utility scripts
+├── workflows/                 # Workflow definitions
+│   ├── workflowName.json     # Main workflow definition
+│   ├── workflowName_schema.json  # Schema definition
+│   └── workflowName_payload.json # Test payload
+├── scripts/
+│   ├── validate-workflows.js  # Validation script
+│   └── schemaInjector.js     # Schema injection utility
+└── .github/
+    └── workflows/
+        └── main.yml            # CI/CD pipeline
 ```
 
-## Getting Started
+## 🚀 Quick Start
 
-### Prerequisites
-- Node.js (v14 or higher)
-- npm or yarn
-- Docker (for local testing)
-- Git
-
-### Local Development Setup
-
-1. Clone the repository:
+1. **Create New Workflow**
 ```bash
-git clone https://github.com/foodready/awe.git
-cd awe
+# Create workflow files
+touch workflows/myWorkflow.json
+touch workflows/myWorkflow_schema.json
+touch workflows/myWorkflow_payload.json
 ```
 
-2. Install dependencies:
+2. **Validate Locally**
 ```bash
 npm install
+npm run validate
 ```
 
-3. Set up local environment:
+3. **Test Changes**
 ```bash
-cp .env.example .env
-# Configure your environment variables
+# Watch mode for development
+npm run validate:watch
 ```
 
-4. Create your first workflow:
-```bash
-npm run create-workflow myWorkflow
-```
+## 📋 File Requirements
 
-### Workflow Development
-
-1. **Create Workflow Files**:
-```
-myWorkflow.json           # Workflow definition
-myWorkflow_schema.json    # Schema definition
-myWorkflow_payload.json   # Test payload
-```
-
-2. **Validate Locally**:
-```bash
-npm run validate ./workflows/myWorkflow.json
-```
-
-3. **Test Worker Functions**:
-```bash
-npm run test-worker ./workers/myWorker.js
-```
-
-### Deployment
-
-1. **Automated Deployment**:
-- Push to main branch triggers validation and deployment
-- GitHub Actions handles the deployment pipeline
-
-2. **Manual Deployment**:
-```bash
-npm run deploy-workflow myWorkflow
-```
-
-## Configuration
-
-### Workflow Structure
+### Workflow Definition (workflowName.json)
 ```json
 {
   "name": "workflowName",
   "version": 1,
   "tasks": [...],
-  "inputParameters": [...],
-  "outputParameters": {...}
+  "inputSchema": {
+    "name": "workflowName_schema",
+    "type": "JSON"
+  }
 }
 ```
 
-### Schema Definition
+### Schema Definition (workflowName_schema.json)
 ```json
 {
-  "name": "workflowName_input",
+  "name": "workflowName_schema",
   "version": 1,
   "type": "JSON",
   "data": {
@@ -148,73 +68,68 @@ npm run deploy-workflow myWorkflow
 }
 ```
 
-## Development Guidelines
+## 🔄 Development Workflow
 
-### Best Practices
-1. Always include schema definitions
-2. Provide test payloads
-3. Document worker functions
-4. Follow naming conventions
-5. Include version information
+1. **Feature Development**
+   - Create feature branch from main
+   - Develop and test locally
+   - Create PR to main
 
-### Version Control
-- Use semantic versioning for workflows
-- Include changelog entries
-- Tag significant versions
-- Document breaking changes
+2. **Validation**
+   - Automated validation on PR
+   - Schema validation
+   - Workflow structure validation
+   - Input/output validation
 
-## Testing
+3. **Deployment**
+   - Automatic deployment on merge to main
+   - Schema injection
+   - Version validation
+   - Deployment confirmation
 
-### Local Testing
+## ⚙️ Configuration
+
+Required environment variables:
+- `ORKES_REPO_KEY`: Orkes API Key
+- `ORKES_REPO_SECRET`: Orkes API Secret
+
+## 🛠️ Commands
+
 ```bash
-# Run validation tests
-npm run test
+# Install dependencies
+npm install
 
-# Test specific workflow
-npm run test-workflow myWorkflow
+# Run validation
+npm run validate
 
-# Test worker functions
-npm run test-worker myWorker
+# Watch mode
+npm run validate:watch
+
+# Pre-commit hook
+npm run precommit
 ```
 
-### CI/CD Testing
-- Automated tests run on pull requests
-- Validation checks for schema compliance
-- Worker function testing
-- Integration testing
+## 🚨 Error Handling
 
-## Monitoring & Maintenance
+Common errors and solutions:
+1. Schema validation failures
+2. Workflow structure issues
+3. Deployment conflicts
 
-### Version Tracking
-- Track workflow versions in production
-- Monitor execution statistics
-- Track error rates and performance
+## 📚 Documentation
 
-### Troubleshooting
-- Validation error resolution
-- Schema compliance checking
-- Worker function debugging
-- Deployment issue resolution
+- [Development Guide](docs/development.md)
+- [Validation Rules](docs/validation.md)
+- [Deployment Process](docs/deployment.md)
 
-## Contributing
+## 🤝 Contributing
 
 1. Fork the repository
-2. Create a feature branch
-3. Implement changes
-4. Add tests
-5. Submit pull request
+2. Create feature branch
+3. Make changes
+4. Run validation
+5. Create PR
 
-## Support
+## 📝 License
 
-For internal support:
-- Slack: #workflow-automation
-- Email: workflow-support@foodready.ai
-- Documentation: [Internal Wiki Link]
-
-## License
-
-Proprietary - FoodReady, Inc. All rights reserved.
-
----
-
-*Built and maintained by the FoodReady Engineering Team*
+Proprietary - FoodReady, Inc.
