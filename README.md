@@ -1,10 +1,10 @@
-# FoodReady Automation Workflow Engine (AWE)
+# Automation Workflow Engine 
 
 A comprehensive platform for creating, testing, validating, and managing workflow automations in the FoodReady ecosystem. Built on top of Orkes Conductor, this system provides end-to-end workflow management with robust development and deployment capabilities.
 
 ## Overview
 
-FoodReady AWE serves as the central hub for all workflow automation needs, enabling teams to:
+AWE serves as the central hub for all workflow automation needs, enabling teams to:
 - Develop and test workflows locally
 - Validate workflow definitions against schemas
 - Maintain version control of workflows
@@ -208,13 +208,7 @@ npm run test-worker myWorker
 
 For internal support:
 - Slack: #workflow-automation
-- Email: workflow-support@foodready.ai
 - Documentation: [Internal Wiki Link]
 
 ## License
 
-Proprietary - FoodReady, Inc. All rights reserved.
-
----
-
-*Built and maintained by the FoodReady Engineering Team*
